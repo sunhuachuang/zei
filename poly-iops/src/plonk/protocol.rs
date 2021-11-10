@@ -75,6 +75,7 @@
 
 #[allow(non_snake_case)]
 pub mod prover {
+    use std::fs::OpenOptions;
     use crate::commitments::pcs::{BatchProofEval, PolyComScheme};
     use crate::commitments::transcript::PolyComTranscript;
     use crate::plonk::errors::PlonkError;
@@ -94,6 +95,7 @@ pub mod prover {
     use merlin::Transcript;
     use rand_core::{CryptoRng, RngCore};
     use ruc::*;
+    use std::io::Write;
 
     /// A PlonkProof is generic on the polynomial commitment scheme, PCS.
     /// PCS is generic in the commitment group C, the eval proof type E, and Field elements F.
@@ -186,6 +188,14 @@ pub mod prover {
         // Prepare extended witness
         let extended_witness = cs.extend_witness(witness);
         let IO = PublicVars_polynomial::<PCS>(&params, &online_values);
+        let mut file = OpenOptions::new()
+            .write(true)
+            .append(true)
+            .open("/tmp/proof_generation_data.txt")
+            .unwrap();
+        if let Err(e) = writeln!(&mut file, "IO {:?}", IO.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
 
         // 1. build witness polynomials, hide them and commit
         let root = &params.verifier_params.root;
@@ -203,22 +213,47 @@ pub mod prover {
             witness_openings.push(O_f);
             C_witness_polys.push(C_f);
         }
+        if let Err(e) = writeln!(&mut file, "1. C_witness_polys {:?}", C_witness_polys.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
+        if let Err(e) = writeln!(&mut file, "1. witness_openings {:?}", witness_openings.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
+
 
         // 2. get challenges gamma and delta
         let gamma = transcript_get_plonk_challenge_gamma(transcript, n_constraints);
         let delta = transcript_get_plonk_challenge_delta(transcript, n_constraints);
         challenges.insert_gamma_delta(gamma, delta).unwrap(); // safe unwrap
+        if let Err(e) = writeln!(&mut file, "2, gamma {:?}", gamma) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
+        if let Err(e) = writeln!(&mut file, "2. delta {:?}", delta) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
 
         // 3. build sigma, hide it and commit
         let mut Sigma =
             Sigma_polynomial::<PCS, CS>(cs, params, &extended_witness, &challenges);
         hide_polynomial(prng, &mut Sigma, 2, n_constraints);
-        let (C_Sigma, O_Sigma) = pcs.commit(Sigma).c(d!(PlonkError::CommitmentError))?;
+        let (C_Sigma, O_Sigma) = pcs.commit(Sigma.clone()).c(d!(PlonkError::CommitmentError))?;
         transcript.append_commitment::<PCS::Commitment>(&C_Sigma);
+        if let Err(e) = writeln!(&mut file, "3, Sigma {:?}", Sigma.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
+        if let Err(e) = writeln!(&mut file, "3. C_Sigma {:?}", C_Sigma.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
+        if let Err(e) = writeln!(&mut file, "3. O_Sigma {:?}", O_Sigma.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
 
         // 4. get challenge alpha
         let alpha = transcript_get_plonk_challenge_alpha(transcript, n_constraints);
         challenges.insert_alpha(alpha).unwrap();
+        if let Err(e) = writeln!(&mut file, "4. alpha {:?}", alpha.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
 
         // 5. build Q, split into `n_wires_per_gate` degree-(N+2) polynomials and commit
         // TODO: avoid the cloning when computing witness_polys and Sigma
@@ -241,9 +276,21 @@ pub mod prover {
         for C_q in C_q_polys.iter() {
             transcript.append_commitment::<PCS::Commitment>(C_q);
         }
+        if let Err(e) = writeln!(&mut file, "5. witness_polys {:?}", witness_polys.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
+        if let Err(e) = writeln!(&mut file, "5. Sigma {:?}", Sigma.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
+        if let Err(e) = writeln!(&mut file, "5. Q {:?}", Q.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
 
         // 6. get challenge beta
         let beta = transcript_get_plonk_challenge_beta(transcript, n_constraints);
+        if let Err(e) = writeln!(&mut file, "6. beta {:?}", beta) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
 
         // 7. a) Evaluate the openings of witness/permutation polynomials at beta, and
         // evaluate the opening of Sigma(X) at point g * beta.
@@ -257,9 +304,21 @@ pub mod prover {
             .take(n_wires_per_gate - 1)
             .map(|open| pcs.eval_opening(open, &beta))
             .collect();
+        if let Err(e) = writeln!(&mut file, "7. witness_polys_eval_beta {:?}", witness_polys_eval_beta.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
+        if let Err(e) = writeln!(&mut file, "7. perms_eval_beta {:?}", perms_eval_beta.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
 
         let g_beta = root.mul(&beta);
         let Sigma_eval_g_beta = pcs.eval_opening(&O_Sigma, &g_beta);
+        if let Err(e) = writeln!(&mut file, "7. g_beta {:?}", g_beta.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
+        if let Err(e) = writeln!(&mut file, "7. Sigma_eval_g_beta {:?}", Sigma_eval_g_beta.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
 
         challenges.insert_beta(beta).unwrap();
         //  b). build linearization polynomial r_beta(X), and eval at beta
@@ -282,6 +341,9 @@ pub mod prover {
         let L_eval_beta = pcs.eval_opening(&O_L, &beta);
         transcript.append_field_elem(&Sigma_eval_g_beta);
         transcript.append_field_elem(&L_eval_beta);
+        if let Err(e) = writeln!(&mut file, "7. L_eval_beta {:?}", L_eval_beta.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
 
         // 8. batch eval proofs
         let mut openings: Vec<&PCS::Opening> = witness_openings
@@ -299,7 +361,7 @@ pub mod prover {
         openings.push(&O_Sigma);
         // n_wires_per_gate opening proofs for witness polynomials; n_wires_per_gate-1 opening proofs
         // for the first n_wires_per_gate-1 extended permutations; 1 opening proof for each of [Q(X), L(X)]
-        let mut points = vec![*beta; 2 * n_wires_per_gate + 1];
+        let mut points = vec![beta.clone(); 2 * n_wires_per_gate + 1];
         // One opening proof for Sigma(X) at point g * beta
         points.push(g_beta);
         let (_, batch_eval_proof) = pcs
@@ -311,6 +373,18 @@ pub mod prover {
                 None,
             )
             .c(d!(PlonkError::ProofError))?;
+        if let Err(e) = writeln!(&mut file, "8. O_q_combined {:?}", O_q_combined.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
+        if let Err(e) = writeln!(&mut file, "8. O_L {:?}", O_L.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
+        if let Err(e) = writeln!(&mut file, "8. O_Sigma {:?}", O_Sigma.clone()) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
+        if let Err(e) = writeln!(&mut file, "8. batch_eval_proof {:?}", batch_eval_proof) {
+            eprintln!("Couldn't write to file: {}", e);
+        }
 
         // return proof
         Ok(PlonkProof {

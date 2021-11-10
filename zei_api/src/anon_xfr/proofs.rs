@@ -1,3 +1,4 @@
+use std::fs::OpenOptions;
 use crate::anon_xfr::circuits::{
     build_eq_committed_vals_cs, build_multi_xfr_cs, AMultiXfrPubInputs, AMultiXfrWitness,
 };
@@ -11,6 +12,7 @@ use poly_iops::plonk::protocol::prover::{prover, verifier, PlonkPf};
 use rand_core::{CryptoRng, RngCore};
 use ruc::*;
 use utils::errors::ZeiError;
+use std::io::Write;
 
 const ANON_XFR_TRANSCRIPT: &[u8] = b"Anon Xfr";
 const N_INPUTS_TRANSCRIPT: &[u8] = b"Number of input ABARs";
@@ -28,6 +30,7 @@ pub(crate) fn prove_xfr<R: CryptoRng + RngCore>(
     params: &UserParams,
     secret_inputs: AMultiXfrWitness,
 ) -> Result<AXfrPlonkPf> {
+
     let mut transcript = Transcript::new(ANON_XFR_TRANSCRIPT);
     transcript.append_u64(
         N_INPUTS_TRANSCRIPT,
@@ -40,6 +43,14 @@ pub(crate) fn prove_xfr<R: CryptoRng + RngCore>(
 
     let (mut cs, _) = build_multi_xfr_cs(secret_inputs);
     let witness = cs.get_and_clear_witness();
+    let mut file = OpenOptions::new()
+        .write(true)
+        .append(true)
+        .open("/tmp/proof_generation_data.txt")
+        .unwrap();
+    if let Err(e) = writeln!(&mut file, "TurboPlonkCS {:?}", cs) {
+        eprintln!("Couldn't write to file: {}", e);
+    }
 
     prover(
         rng,

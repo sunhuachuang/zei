@@ -21,6 +21,8 @@ use itertools::Itertools;
 use rand_core::{CryptoRng, RngCore};
 use ruc::*;
 use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::io::Write;
 use utils::errors::ZeiError;
 
 pub mod bar_to_from_abar;
@@ -104,6 +106,15 @@ pub fn gen_anon_xfr_body<R: CryptoRng + RngCore>(
         payers_secrets,
         payees_secrets,
     };
+
+    let mut file = OpenOptions::new()
+        .write(true)
+        .append(true)
+        .open("/tmp/proof_generation_data.txt")
+        .unwrap();
+    if let Err(e) = writeln!(&mut file, "secret_inputs {:?}", secret_inputs) {
+        eprintln!("Couldn't write to file: {}", e);
+    }
     let proof = prove_xfr(prng, params, secret_inputs).c(d!())?;
 
     let diversified_key_pairs = rand_input_keypairs
@@ -298,6 +309,7 @@ fn nullifier(
 
 #[cfg(test)]
 mod tests {
+    use std::fs::OpenOptions;
     use crate::anon_xfr::keys::AXfrKeyPair;
     use crate::anon_xfr::merkle_tree::MerkleTree;
     use crate::anon_xfr::structs::{
@@ -317,6 +329,7 @@ mod tests {
     use rand_core::{CryptoRng, RngCore};
     use ruc::*;
     use utils::errors::ZeiError;
+    use std::io::Write;
 
     #[test]
     fn test_anon_xfr() {
@@ -1009,5 +1022,87 @@ mod tests {
             .build()
             .unwrap();
         (oabar, keypair, dec_key, enc_key)
+    }
+
+    #[test]
+    pub fn test_anon_xfr_full_tree() {
+        let mut prng = ChaChaRng::from_seed([0u8; 32]);
+
+        let user_params =
+            UserParams::from_file_if_exists(1, 1, Some(41), DEFAULT_BP_NUM_GENS, None)
+                .unwrap();
+
+        let amount = 1234;
+        let asset_type = AssetType::from_identical_byte(0);
+        let (oabar, keypair_in, dec_key_in, _enc_key_in) = gen_oabar_and_keys(&mut prng, amount.clone(), asset_type);
+
+        let abar = AnonBlindAssetRecord::from_oabar(&oabar);
+        assert_eq!(keypair_in.pub_key(), *oabar.pub_key_ref());
+        let rand_keypair_in = keypair_in.randomize(&oabar.get_key_rand_factor());
+        assert_eq!(rand_keypair_in.pub_key(), abar.public_key);
+
+        let owner_memo = oabar.get_owner_memo().unwrap();
+
+        let mut mt = MerkleTree::new();
+        let uid = mt.add_abar(&abar).unwrap();
+        let _ = mt.commit().unwrap();
+
+        let mt_leaf_info = mt.get_mt_leaf_info(uid).unwrap();
+
+        // output keys
+        let keypair_out = AXfrKeyPair::generate(&mut prng);
+        let dec_key_out = XSecretKey::new(&mut prng);
+        let enc_key_out = XPublicKey::from(&dec_key_out);
+
+        let (_body, _merkle_root, _key_pairs) = {
+            // prover scope
+            // 1. open abar
+            let oabar_in = OpenAnonBlindAssetRecordBuilder::from_abar(
+                &abar,
+                owner_memo,
+                &keypair_in,
+                &dec_key_in,
+            )
+                .unwrap()
+                .mt_leaf_info(mt_leaf_info)
+                .build()
+                .unwrap();
+            assert_eq!(amount, oabar_in.get_amount());
+            assert_eq!(asset_type, oabar_in.get_asset_type());
+            assert_eq!(keypair_in.pub_key(), oabar_in.pub_key);
+
+            let oabar_out = OpenAnonBlindAssetRecordBuilder::new()
+                .amount(amount)
+                .asset_type(asset_type)
+                .pub_key(keypair_out.pub_key())
+                .finalize(&mut prng, &enc_key_out)
+                .unwrap()
+                .build()
+                .unwrap();
+
+            let mut file = OpenOptions::new()
+                .write(true)
+                .append(true)
+                .open("/tmp/proof_generation_data.txt")
+                .unwrap();
+            if let Err(e) = writeln!(&mut file, "oabar_in {:?}", oabar_in) {
+                eprintln!("Couldn't write to file: {}", e);
+            }
+            if let Err(e) = writeln!(&mut file, "oabar_out {:?}", oabar_out) {
+                eprintln!("Couldn't write to file: {}", e);
+            }
+
+            prng = ChaChaRng::from_seed([0u8; 32]);
+            let (body, key_pairs) = gen_anon_xfr_body(
+                &mut prng,
+                &user_params,
+                &[oabar_in],
+                &[oabar_out],
+                &[keypair_in],
+            )
+                .unwrap();
+            (body, mt.get_latest_hash(), key_pairs)
+        };
+
     }
 }
