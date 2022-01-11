@@ -279,7 +279,7 @@ impl Group for BLSG1 {
             &points.iter().map(|r| r.0).collect::<Vec<G1Projective>>(),
         );
 
-        Self(ark_ec::msm::VariableBase::msm(&points_raw, &scalars_raw))
+        Self(ark_ec::msm::VariableBaseMSM::multi_scalar_mul(&points_raw, &scalars_raw))
     }
 }
 
