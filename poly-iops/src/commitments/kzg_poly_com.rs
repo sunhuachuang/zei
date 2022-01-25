@@ -532,4 +532,32 @@ mod tests_kzg_impl {
         );
         assert!(wrong_value_verif.is_err());
     }
+
+    #[test]
+    fn test_crs_commit() {
+        let filepath = "test_data/zei_crs_bls12381_2_10.dat";
+        if !std::path::PathBuf::from(filepath).exists() {
+            return;
+        }
+
+        let pcs = KZGCommitmentSchemeBLS::from_file(filepath).unwrap();
+        type Field = BLSScalar;
+        let one = Field::one();
+        let two = one.add(&one);
+        let three = two.add(&one);
+        let six = three.add(&three);
+
+        let fq_poly = FpPolynomial::from_coefs(vec![two, three, six]);
+        let (commitment, open) = pcs.commit(fq_poly).unwrap();
+
+        let coefs_poly_blsscalar = open.get_coefs_ref().iter().collect_vec();
+        let mut expected_committed_value = BLSG1::get_identity();
+
+        // Doing the multiexp by hand
+        for (i, coef) in coefs_poly_blsscalar.iter().enumerate() {
+            let g_i = pcs.public_parameter_group_1[i].clone();
+            expected_committed_value = expected_committed_value.add(&g_i.mul(&coef));
+        }
+        assert_eq!(expected_committed_value, commitment.value);
+    }
 }
